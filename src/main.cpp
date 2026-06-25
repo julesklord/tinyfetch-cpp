@@ -352,58 +352,49 @@ int main(int argc, char* argv[]) {
 
     if (!noASCII && hasExt) {
         if (termW < 65) {
-            noASCII = true;
-            minLogoW = 0;
+            // Keep features active, but they will stack vertically if termW is small
         }
     }
 
+    // Calculate maximum visual lengths of the contents for each pane
+    int maxInfoLineW = 0;
+    for (const auto& line : info) {
+        int rawLen = visualLength(line);
+        if (rawLen > maxInfoLineW) maxInfoLineW = rawLen;
+    }
+
+    int maxExtLineW = 0;
     if (hasExt) {
-        if (termW < 45) {
-            hasExt = false;
-            extInfo.clear();
-            extW = 0;
+        for (const auto& line : extInfo) {
+            int rawLen = visualLength(line);
+            if (rawLen > maxExtLineW) maxExtLineW = rawLen;
         }
     }
 
-    if (!noASCII && !hasExt) {
-        if (termW < 41) {
-            noASCII = true;
-            minLogoW = 0;
-        }
-    }
+    // Determine margins/borders needed for side-by-side layout
+    int numActivePanes = 0;
+    if (!noASCII) numActivePanes++;
+    numActivePanes++; // info is always active
+    if (hasExt) numActivePanes++;
 
-    int totalBorders = 9;
-    if (noASCII) {
-        totalBorders = 5;
+    int bordersSideBySide = 5; // 1 pane (noASCII, !hasExt) -> ┌──────┐ (5 chars)
+    if (numActivePanes == 2) {
+        bordersSideBySide = 6; // ┌────┬────┐ (6 chars)
+    } else if (numActivePanes == 3) {
+        bordersSideBySide = 9; // ┌────┬────┬────┐ (9 chars)
     }
     if (noFrame) {
-        totalBorders = 6;
+        bordersSideBySide = 0;
+        if (!noASCII) bordersSideBySide += 4; // Logo spacer: 4 spaces
+        if (hasExt) bordersSideBySide += 3;   // Extended spacer: 3 spaces
     }
 
-    int available = termW - minLogoW - totalBorders;
-    if (hasExt) {
-        rightW = available * 50 / 100;
-        extW = available - rightW;
-        if (rightW < 20) {
-            rightW = 20;
-        }
-        if (extW < 20) {
-            extW = 20;
-        }
-    } else {
-        rightW = available;
-        if (rightW < 20) {
-            rightW = 20;
-        }
-    }
+    // Minimum widths we require to display them side-by-side
+    int minInfoW = 20;
+    int minExtW = hasExt ? 20 : 0;
+    int minSideBySideWidth = minLogoW + minInfoW + minExtW + bordersSideBySide;
 
-    int maxLines = info.size();
-    if (!noASCII && logo.size() > static_cast<size_t>(maxLines)) {
-        maxLines = logo.size();
-    }
-    if (hasExt && extInfo.size() > static_cast<size_t>(maxLines)) {
-        maxLines = extInfo.size();
-    }
+    bool useVerticalLayout = (termW < minSideBySideWidth);
 
     auto repeatStr = [](const std::string& s, int count) -> std::string {
         std::string res;
@@ -411,168 +402,244 @@ int main(int argc, char* argv[]) {
         return res;
     };
 
-    if (noFrame) {
-        for (int i = 0; i < maxLines; ++i) {
-            std::string logoPrint = "";
-            if (!noASCII && i < static_cast<int>(logo.size())) {
-                logoPrint = logo[i];
-            }
-            int lRaw = visualLength(logoPrint);
-            int lPadCount = leftW - lRaw;
-            std::string lPadding = (lPadCount > 0) ? repeatStr(" ", lPadCount) : "";
+    if (useVerticalLayout) {
+        // Vertical stacked layout: Draw title bars for each pane sequentially
+        int boxW = termW - 4;
+        if (boxW < 12) boxW = 12;
 
-            std::string infoPrint = "";
-            if (i < static_cast<int>(info.size())) {
-                infoPrint = info[i];
-            }
-            infoPrint = truncateANSI(infoPrint, rightW);
-            int rRaw = visualLength(infoPrint);
-            int rPadCount = rightW - rRaw;
-            std::string rPadding = (rPadCount > 0) ? repeatStr(" ", rPadCount) : "";
-
-            std::string ePrint = "";
-            if (hasExt && i < static_cast<int>(extInfo.size())) {
-                ePrint = extInfo[i];
-            }
-            if (ePrint == "---") {
-                ePrint = "\033[00;37m" + repeatStr("╌", extW) + restore;
+        auto drawVerticalBox = [&](const std::string& title, const std::vector<std::string>& lines) {
+            if (noFrame) {
+                std::cout << borderCol << "--- " << title << " ---" << restore << "\n";
+                for (const auto& line : lines) {
+                    std::string printLine = line;
+                    if (printLine == "---") {
+                        printLine = "\033[00;37m" + repeatStr("╌", termW) + restore;
+                    } else {
+                        printLine = truncateANSI(printLine, termW);
+                    }
+                    std::cout << printLine << "\n";
+                }
+                std::cout << "\n";
             } else {
-                ePrint = truncateANSI(ePrint, extW);
-            }
+                std::string titleStr = " " + title + " ";
+                int titleLen = title.length() + 2;
+                int fillW = boxW - titleLen - 2;
+                if (fillW < 2) fillW = 2;
 
-            std::string sb = "";
-            if (!noASCII) {
-                sb += " " + logoPrint + lPadding + "   ";
+                std::string topBorder = borderCol + "┌──" + restore + titleStr + borderCol + repeatStr("─", fillW) + "┐" + restore;
+                std::string botBorder = borderCol + "└" + repeatStr("─", boxW) + "┘" + restore;
+
+                std::cout << topBorder << "\n";
+                for (const auto& line : lines) {
+                    std::string printLine = line;
+                    if (printLine == "---") {
+                        printLine = "\033[00;37m" + repeatStr("╌", boxW - 2) + restore;
+                    } else {
+                        printLine = truncateANSI(printLine, boxW - 2);
+                    }
+                    int visualLen = visualLength(printLine);
+                    int padding = boxW - 2 - visualLen;
+                    if (padding < 0) padding = 0;
+                    std::string padStr(padding, ' ');
+                    std::printf("%s│%s %s%s %s│\n", borderCol.c_str(), restore.c_str(), printLine.c_str(), padStr.c_str(), borderCol.c_str());
+                }
+                std::cout << botBorder << "\n";
             }
-            sb += infoPrint + rPadding;
-            if (hasExt) {
-                sb += "   " + ePrint;
-            }
-            std::cout << sb << "\n";
+        };
+
+        if (!noASCII && !logo.empty()) {
+            drawVerticalBox("OS Logo", logo);
+        }
+        if (!info.empty()) {
+            drawVerticalBox("System Info", info);
+        }
+        if (hasExt && !extInfo.empty()) {
+            drawVerticalBox("Plugins & Diagnostics", extInfo);
         }
     } else {
-        if (!hasExt) {
-            if (noASCII) {
-                std::string topLine = borderCol + "┌" + repeatStr("─", rightW + 2) + "┐" + restore;
-                std::string botLine = borderCol + "└" + repeatStr("─", rightW + 2) + "┘" + restore;
-                std::cout << topLine << "\n";
-                for (int i = 0; i < maxLines; ++i) {
-                    std::string rLine = "";
-                    if (i < static_cast<int>(info.size())) {
-                        rLine = info[i];
-                    }
-                    rLine = truncateANSI(rLine, rightW);
-                    int rRaw = visualLength(rLine);
-                    int rPadCount = rightW - rRaw;
-                    std::string rPadding = (rPadCount > 0) ? repeatStr(" ", rPadCount) : "";
-                    std::printf("%s│%s %s%s %s│\n", borderCol.c_str(), restore.c_str(), rLine.c_str(), rPadding.c_str(), borderCol.c_str());
-                }
-                std::cout << botLine << "\n";
-            } else {
-                std::string topLine = borderCol + "┌" + repeatStr("─", leftW + 2) + "┬" + repeatStr("─", rightW + 2) + "┐" + restore;
-                std::string botLine = borderCol + "└" + repeatStr("─", leftW + 2) + "┴" + repeatStr("─", rightW + 2) + "┘" + restore;
-                std::cout << topLine << "\n";
-                for (int i = 0; i < maxLines; ++i) {
-                    std::string logoPrint = "";
-                    if (i < static_cast<int>(logo.size())) {
-                        logoPrint = logo[i];
-                    }
-                    int lRaw = visualLength(logoPrint);
-                    int lPadCount = leftW - lRaw;
-                    std::string lPadding = (lPadCount > 0) ? repeatStr(" ", lPadCount) : "";
+        // Side-by-side layout: Scale rightW and extW proportionally to fit termW
+        int available = termW - minLogoW - bordersSideBySide;
+        if (hasExt) {
+            rightW = available * 50 / 100;
+            extW = available - rightW;
+            if (rightW < 20) rightW = 20;
+            if (extW < 20) extW = 20;
+        } else {
+            rightW = available;
+            if (rightW < 20) rightW = 20;
+        }
 
-                    std::string infoPrint = "";
-                    if (i < static_cast<int>(info.size())) {
-                        infoPrint = info[i];
-                    }
-                    infoPrint = truncateANSI(infoPrint, rightW);
-                    int rRaw = visualLength(infoPrint);
-                    int rPadCount = rightW - rRaw;
-                    std::string rPadding = (rPadCount > 0) ? repeatStr(" ", rPadCount) : "";
+        int maxLines = info.size();
+        if (!noASCII && logo.size() > static_cast<size_t>(maxLines)) {
+            maxLines = logo.size();
+        }
+        if (hasExt && extInfo.size() > static_cast<size_t>(maxLines)) {
+            maxLines = extInfo.size();
+        }
 
-                    std::printf("%s│%s %s%s %s│%s %s%s %s│\n",
-                        borderCol.c_str(), restore.c_str(), logoPrint.c_str(), lPadding.c_str(),
-                        borderCol.c_str(), restore.c_str(), infoPrint.c_str(), rPadding.c_str(),
-                        borderCol.c_str());
+        if (noFrame) {
+            for (int i = 0; i < maxLines; ++i) {
+                std::string logoPrint = "";
+                if (!noASCII && i < static_cast<int>(logo.size())) {
+                    logoPrint = logo[i];
                 }
-                std::cout << botLine << "\n";
+                int lRaw = visualLength(logoPrint);
+                int lPadCount = leftW - lRaw;
+                std::string lPadding = (lPadCount > 0) ? repeatStr(" ", lPadCount) : "";
+
+                std::string infoPrint = "";
+                if (i < static_cast<int>(info.size())) {
+                    infoPrint = info[i];
+                }
+                infoPrint = truncateANSI(infoPrint, rightW);
+                int rRaw = visualLength(infoPrint);
+                int rPadCount = rightW - rRaw;
+                std::string rPadding = (rPadCount > 0) ? repeatStr(" ", rPadCount) : "";
+
+                std::string ePrint = "";
+                if (hasExt && i < static_cast<int>(extInfo.size())) {
+                    ePrint = extInfo[i];
+                }
+                if (ePrint == "---") {
+                    ePrint = "\033[00;37m" + repeatStr("╌", extW) + restore;
+                } else {
+                    ePrint = truncateANSI(ePrint, extW);
+                }
+
+                std::string sb = "";
+                if (!noASCII) {
+                    sb += " " + logoPrint + lPadding + "   ";
+                }
+                sb += infoPrint + rPadding;
+                if (hasExt) {
+                    sb += "   " + ePrint;
+                }
+                std::cout << sb << "\n";
             }
         } else {
-            if (noASCII) {
-                std::string topLine = borderCol + "┌" + repeatStr("─", rightW + 2) + "┬" + repeatStr("─", extW + 2) + "┐" + restore;
-                std::string botLine = borderCol + "└" + repeatStr("─", rightW + 2) + "┴" + repeatStr("─", extW + 2) + "┘" + restore;
-                std::cout << topLine << "\n";
-                for (int i = 0; i < maxLines; ++i) {
-                    std::string rLine = "";
-                    if (i < static_cast<int>(info.size())) {
-                        rLine = info[i];
+            if (!hasExt) {
+                if (noASCII) {
+                    std::string topLine = borderCol + "┌" + repeatStr("─", rightW + 2) + "┐" + restore;
+                    std::string botLine = borderCol + "└" + repeatStr("─", rightW + 2) + "┘" + restore;
+                    std::cout << topLine << "\n";
+                    for (int i = 0; i < maxLines; ++i) {
+                        std::string rLine = "";
+                        if (i < static_cast<int>(info.size())) {
+                            rLine = info[i];
+                        }
+                        rLine = truncateANSI(rLine, rightW);
+                        int rRaw = visualLength(rLine);
+                        int rPadCount = rightW - rRaw;
+                        std::string rPadding = (rPadCount > 0) ? repeatStr(" ", rPadCount) : "";
+                        std::printf("%s│%s %s%s %s│\n", borderCol.c_str(), restore.c_str(), rLine.c_str(), rPadding.c_str(), borderCol.c_str());
                     }
-                    rLine = truncateANSI(rLine, rightW);
-                    int rRaw = visualLength(rLine);
-                    int rPadCount = rightW - rRaw;
-                    std::string rPadding = (rPadCount > 0) ? repeatStr(" ", rPadCount) : "";
+                    std::cout << botLine << "\n";
+                } else {
+                    std::string topLine = borderCol + "┌" + repeatStr("─", leftW + 2) + "┬" + repeatStr("─", rightW + 2) + "┐" + restore;
+                    std::string botLine = borderCol + "└" + repeatStr("─", leftW + 2) + "┴" + repeatStr("─", rightW + 2) + "┘" + restore;
+                    std::cout << topLine << "\n";
+                    for (int i = 0; i < maxLines; ++i) {
+                        std::string logoPrint = "";
+                        if (i < static_cast<int>(logo.size())) {
+                            logoPrint = logo[i];
+                        }
+                        int lRaw = visualLength(logoPrint);
+                        int lPadCount = leftW - lRaw;
+                        std::string lPadding = (lPadCount > 0) ? repeatStr(" ", lPadCount) : "";
 
-                    std::string eLine = "";
-                    if (i < static_cast<int>(extInfo.size())) {
-                        eLine = extInfo[i];
-                    }
-                    if (eLine == "---") {
-                        eLine = "\033[00;37m" + repeatStr("╌", extW) + restore;
-                    } else {
-                        eLine = truncateANSI(eLine, extW);
-                    }
-                    int eRaw = visualLength(eLine);
-                    int ePadCount = extW - eRaw;
-                    std::string ePadding = (ePadCount > 0) ? repeatStr(" ", ePadCount) : "";
+                        std::string infoPrint = "";
+                        if (i < static_cast<int>(info.size())) {
+                            infoPrint = info[i];
+                        }
+                        infoPrint = truncateANSI(infoPrint, rightW);
+                        int rRaw = visualLength(infoPrint);
+                        int rPadCount = rightW - rRaw;
+                        std::string rPadding = (rPadCount > 0) ? repeatStr(" ", rPadCount) : "";
 
-                    std::printf("%s│%s %s%s %s│%s %s%s %s│\n",
-                        borderCol.c_str(), restore.c_str(), rLine.c_str(), rPadding.c_str(),
-                        borderCol.c_str(), restore.c_str(), eLine.c_str(), ePadding.c_str(),
-                        borderCol.c_str());
+                        std::printf("%s│%s %s%s %s│%s %s%s %s│\n",
+                            borderCol.c_str(), restore.c_str(), logoPrint.c_str(), lPadding.c_str(),
+                            borderCol.c_str(), restore.c_str(), infoPrint.c_str(), rPadding.c_str(),
+                            borderCol.c_str());
+                    }
+                    std::cout << botLine << "\n";
                 }
-                std::cout << botLine << "\n";
             } else {
-                std::string topLine = borderCol + "┌" + repeatStr("─", leftW + 2) + "┬" + repeatStr("─", rightW + 2) + "┬" + repeatStr("─", extW + 2) + "┐" + restore;
-                std::string botLine = borderCol + "└" + repeatStr("─", leftW + 2) + "┴" + repeatStr("─", rightW + 2) + "┴" + repeatStr("─", extW + 2) + "┘" + restore;
-                std::cout << topLine << "\n";
-                for (int i = 0; i < maxLines; ++i) {
-                    std::string logoPrint = "";
-                    if (i < static_cast<int>(logo.size())) {
-                        logoPrint = logo[i];
-                    }
-                    int lRaw = visualLength(logoPrint);
-                    int lPadCount = leftW - lRaw;
-                    std::string lPadding = (lPadCount > 0) ? repeatStr(" ", lPadCount) : "";
+                if (noASCII) {
+                    std::string topLine = borderCol + "┌" + repeatStr("─", rightW + 2) + "┬" + repeatStr("─", extW + 2) + "┐" + restore;
+                    std::string botLine = borderCol + "└" + repeatStr("─", rightW + 2) + "┴" + repeatStr("─", extW + 2) + "┘" + restore;
+                    std::cout << topLine << "\n";
+                    for (int i = 0; i < maxLines; ++i) {
+                        std::string rLine = "";
+                        if (i < static_cast<int>(info.size())) {
+                            rLine = info[i];
+                        }
+                        rLine = truncateANSI(rLine, rightW);
+                        int rRaw = visualLength(rLine);
+                        int rPadCount = rightW - rRaw;
+                        std::string rPadding = (rPadCount > 0) ? repeatStr(" ", rPadCount) : "";
 
-                    std::string infoPrint = "";
-                    if (i < static_cast<int>(info.size())) {
-                        infoPrint = info[i];
-                    }
-                    infoPrint = truncateANSI(infoPrint, rightW);
-                    int rRaw = visualLength(infoPrint);
-                    int rPadCount = rightW - rRaw;
-                    std::string rPadding = (rPadCount > 0) ? repeatStr(" ", rPadCount) : "";
+                        std::string eLine = "";
+                        if (i < static_cast<int>(extInfo.size())) {
+                            eLine = extInfo[i];
+                        }
+                        if (eLine == "---") {
+                            eLine = "\033[00;37m" + repeatStr("╌", extW) + restore;
+                        } else {
+                            eLine = truncateANSI(eLine, extW);
+                        }
+                        int eRaw = visualLength(eLine);
+                        int ePadCount = extW - eRaw;
+                        std::string ePadding = (ePadCount > 0) ? repeatStr(" ", ePadCount) : "";
 
-                    std::string ePrint = "";
-                    if (i < static_cast<int>(extInfo.size())) {
-                        ePrint = extInfo[i];
+                        std::printf("%s│%s %s%s %s│%s %s%s %s│\n",
+                            borderCol.c_str(), restore.c_str(), rLine.c_str(), rPadding.c_str(),
+                            borderCol.c_str(), restore.c_str(), eLine.c_str(), ePadding.c_str(),
+                            borderCol.c_str());
                     }
-                    if (ePrint == "---") {
-                        ePrint = "\033[00;37m" + repeatStr("╌", extW) + restore;
-                    } else {
-                        ePrint = truncateANSI(ePrint, extW);
-                    }
-                    int eRaw = visualLength(ePrint);
-                    int ePadCount = extW - eRaw;
-                    std::string ePadding = (ePadCount > 0) ? repeatStr(" ", ePadCount) : "";
+                    std::cout << botLine << "\n";
+                } else {
+                    std::string topLine = borderCol + "┌" + repeatStr("─", leftW + 2) + "┬" + repeatStr("─", rightW + 2) + "┬" + repeatStr("─", extW + 2) + "┐" + restore;
+                    std::string botLine = borderCol + "└" + repeatStr("─", leftW + 2) + "┴" + repeatStr("─", rightW + 2) + "┴" + repeatStr("─", extW + 2) + "┘" + restore;
+                    std::cout << topLine << "\n";
+                    for (int i = 0; i < maxLines; ++i) {
+                        std::string logoPrint = "";
+                        if (i < static_cast<int>(logo.size())) {
+                            logoPrint = logo[i];
+                        }
+                        int lRaw = visualLength(logoPrint);
+                        int lPadCount = leftW - lRaw;
+                        std::string lPadding = (lPadCount > 0) ? repeatStr(" ", lPadCount) : "";
 
-                    std::printf("%s│%s %s%s %s│%s %s%s %s│%s %s%s %s│\n",
-                        borderCol.c_str(), restore.c_str(), logoPrint.c_str(), lPadding.c_str(),
-                        borderCol.c_str(), restore.c_str(), infoPrint.c_str(), rPadding.c_str(),
-                        borderCol.c_str(), restore.c_str(), ePrint.c_str(), ePadding.c_str(),
-                        borderCol.c_str());
+                        std::string infoPrint = "";
+                        if (i < static_cast<int>(info.size())) {
+                            infoPrint = info[i];
+                        }
+                        infoPrint = truncateANSI(infoPrint, rightW);
+                        int rRaw = visualLength(infoPrint);
+                        int rPadCount = rightW - rRaw;
+                        std::string rPadding = (rPadCount > 0) ? repeatStr(" ", rPadCount) : "";
+
+                        std::string ePrint = "";
+                        if (i < static_cast<int>(extInfo.size())) {
+                            ePrint = extInfo[i];
+                        }
+                        if (ePrint == "---") {
+                            ePrint = "\033[00;37m" + repeatStr("╌", extW) + restore;
+                        } else {
+                            ePrint = truncateANSI(ePrint, extW);
+                        }
+                        int eRaw = visualLength(ePrint);
+                        int ePadCount = extW - eRaw;
+                        std::string ePadding = (ePadCount > 0) ? repeatStr(" ", ePadCount) : "";
+
+                        std::printf("%s│%s %s%s %s│%s %s%s %s│%s %s%s %s│\n",
+                            borderCol.c_str(), restore.c_str(), logoPrint.c_str(), lPadding.c_str(),
+                            borderCol.c_str(), restore.c_str(), infoPrint.c_str(), rPadding.c_str(),
+                            borderCol.c_str(), restore.c_str(), ePrint.c_str(), ePadding.c_str(),
+                            borderCol.c_str());
+                    }
+                    std::cout << botLine << "\n";
                 }
-                std::cout << botLine << "\n";
             }
         }
     }
